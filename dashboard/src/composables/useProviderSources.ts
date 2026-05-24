@@ -184,7 +184,9 @@ export function useProviderSources(options: UseProviderSourcesOptions) {
   const basicSourceConfig = computed(() => {
     if (!editableProviderSource.value) return null
 
-    const fields = ['id', 'key', 'api_base']
+    const fields = editableProviderSource.value.provider === 'google-vertex-ai'
+      ? ['id', 'api_base']
+      : ['id', 'key', 'api_base']
     const basic: Record<string, any> = {}
 
     fields.forEach((field) => {

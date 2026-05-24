@@ -1189,6 +1189,29 @@
                 "description": "Заголовки запроса",
                 "hint": "Пары ключ/значение будут добавлены в заголовки запроса (default_headers). Значения должны быть строками."
             },
+            "google_vertex_ai": {
+                "hint": "Vertex AI через OpenAI-compatible endpoint Google. API Base URL по умолчанию: https://aiplatform.googleapis.com/v1, location по умолчанию: global; региональные location, например us-central1, автоматически используют соответствующий региональный endpoint."
+            },
+            "vertex_ai_auth_type": {
+                "description": "Тип авторизации Vertex AI",
+                "hint": "service_account использует JSON сервисного аккаунта; adc использует Application Default Credentials. OpenAI-compatible endpoint требует Google Cloud OAuth credentials."
+            },
+            "vertex_ai_project_id": {
+                "description": "Vertex AI project ID",
+                "hint": "ID проекта Google Cloud. Если пусто, AstrBot попробует прочитать его из JSON сервисного аккаунта."
+            },
+            "vertex_ai_location": {
+                "description": "Vertex AI location",
+                "hint": "Регион модели, например global или us-central1. По умолчанию: global."
+            },
+            "vertex_ai_credentials_path": {
+                "description": "Путь к JSON сервисного аккаунта",
+                "hint": "Абсолютный путь к JSON файлу сервисного аккаунта Google Cloud. Оставьте пустым, если вставляете JSON ниже или используете ADC."
+            },
+            "vertex_ai_credentials_json": {
+                "description": "JSON сервисного аккаунта",
+                "hint": "Опционально: вставленный JSON сервисного аккаунта Google Cloud. Обычно путь к файлу проще поддерживать."
+            },
             "custom_extra_body": {
                 "description": "Параметры тела запроса",
                 "hint": "Добавление дополнительных параметров в запрос (temperature, top_p и др.).",

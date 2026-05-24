@@ -24,7 +24,6 @@ from PIL import UnidentifiedImageError
 
 import astrbot.core.message.components as Comp
 from astrbot import logger
-from astrbot.api.provider import Provider
 from astrbot.core.agent.message import (
     AudioURLPart,
     ContentPart,
@@ -36,6 +35,7 @@ from astrbot.core.agent.tool import ToolSet
 from astrbot.core.exceptions import EmptyModelOutputError
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.provider.entities import LLMResponse, TokenUsage, ToolCallsResult
+from astrbot.core.provider.provider import Provider
 from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 from astrbot.core.utils.io import download_file, download_image_by_url
 from astrbot.core.utils.media_utils import ensure_wav
@@ -47,6 +47,7 @@ from astrbot.core.utils.network_utils import (
 from astrbot.core.utils.string_utils import normalize_and_dedupe_strings
 
 from ..register import register_provider_adapter
+from .vertex_ai_openai import VertexAIOpenAIAuth, is_vertex_ai_openai_config
 
 
 @register_provider_adapter(
@@ -227,13 +228,18 @@ class ProviderOpenAIOfficial(Provider):
 
         netloc = unquote(parsed.netloc or "")
         path = unquote(parsed.path or "")
+        if netloc.lower() == "localhost":
+            netloc = ""
+        elif re.fullmatch(r"localhost[A-Za-z]:", netloc, re.IGNORECASE):
+            netloc = netloc[len("localhost") :]
+
         if re.fullmatch(r"[A-Za-z]:", netloc):
-            return str(Path(f"{netloc}{path}"))
+            return f"{netloc}{path}"
         if re.match(r"^/[A-Za-z]:/", path):
             path = path[1:]
-        if netloc and netloc != "localhost":
-            path = f"//{netloc}{path}"
-        return str(Path(path))
+        if netloc:
+            return f"//{netloc}{path}"
+        return path
 
     async def _image_ref_to_data_url(
         self,
@@ -448,12 +454,23 @@ class ProviderOpenAIOfficial(Provider):
             httpx_module = getattr(openai_base_client, "httpx", httpx)
         except ImportError:
             pass
-        return create_proxy_client("OpenAI", proxy, httpx_module=httpx_module)
+        client = create_proxy_client("OpenAI", proxy, httpx_module=httpx_module)
+        return client
 
     def __init__(self, provider_config, provider_settings) -> None:
         super().__init__(provider_config, provider_settings)
+        self.vertex_ai_auth: VertexAIOpenAIAuth | None = None
+        if is_vertex_ai_openai_config(provider_config):
+            self.vertex_ai_auth = VertexAIOpenAIAuth(provider_config)
+            provider_config = {**provider_config, "api_base": self.vertex_ai_auth.base_url}
+            self.provider_config = provider_config
+
         self.chosen_api_key = None
-        self.api_keys: list = super().get_keys()
+        self.api_keys: list = (
+            [self.vertex_ai_auth.initial_client_api_key()]
+            if self.vertex_ai_auth
+            else super().get_keys()
+        )
         self.chosen_api_key = self.api_keys[0] if len(self.api_keys) > 0 else None
         self.timeout = provider_config.get("timeout", 120)
         self.custom_headers = provider_config.get("custom_headers", {})
@@ -465,6 +482,13 @@ class ProviderOpenAIOfficial(Provider):
         else:
             for key in self.custom_headers:
                 self.custom_headers[key] = str(self.custom_headers[key])
+
+        if self.vertex_ai_auth:
+            vertex_headers = self.vertex_ai_auth.default_headers()
+            self.custom_headers = {
+                **vertex_headers,
+                **(self.custom_headers or {}),
+            } or None
 
         if "api_version" in provider_config:
             # Using Azure OpenAI API
@@ -478,13 +502,18 @@ class ProviderOpenAIOfficial(Provider):
             )
         else:
             # Using OpenAI Official API
-            self.client = AsyncOpenAI(
-                api_key=self.chosen_api_key,
-                base_url=provider_config.get("api_base", None),
-                default_headers=self.custom_headers,
-                timeout=self.timeout,
-                http_client=self._create_http_client(provider_config),
-            )
+            client_kwargs = {
+                "api_key": self.chosen_api_key,
+                "base_url": provider_config.get("api_base", None),
+                "default_headers": self.custom_headers,
+                "timeout": self.timeout,
+                "http_client": self._create_http_client(provider_config),
+            }
+            if self.vertex_ai_auth:
+                default_query = self.vertex_ai_auth.default_query()
+                if default_query:
+                    client_kwargs["default_query"] = default_query
+            self.client = AsyncOpenAI(**client_kwargs)
 
         self.default_params = inspect.signature(
             self.client.chat.completions.create,
@@ -494,6 +523,11 @@ class ProviderOpenAIOfficial(Provider):
         self.set_model(model)
 
         self.reasoning_key = "reasoning_content"
+
+    def _refresh_vertex_ai_auth(self) -> None:
+        if not self.vertex_ai_auth:
+            return
+        self.client.api_key = self.vertex_ai_auth.refresh_client_api_key()
 
     def _ollama_disable_thinking_enabled(self) -> bool:
         value = self.provider_config.get("ollama_disable_thinking", False)
@@ -517,6 +551,7 @@ class ProviderOpenAIOfficial(Provider):
 
     async def get_models(self):
         try:
+            self._refresh_vertex_ai_auth()
             models_str = []
             models = await self.client.models.list()
             models = sorted(models.data, key=lambda x: x.id)
@@ -593,6 +628,7 @@ class ProviderOpenAIOfficial(Provider):
 
         self._sanitize_assistant_messages(payloads)
 
+        self._refresh_vertex_ai_auth()
         completion = await self.client.chat.completions.create(
             **payloads,
             stream=False,
@@ -645,6 +681,7 @@ class ProviderOpenAIOfficial(Provider):
 
         self._sanitize_assistant_messages(payloads)
 
+        self._refresh_vertex_ai_auth()
         stream = await self.client.chat.completions.create(
             **payloads,
             stream=True,
